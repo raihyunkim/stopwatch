@@ -1,0 +1,612 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>스탑워치</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
+<style>
+/* Layout: a living US landscape whose time of day follows the stopwatch; one dark LED instrument floats above it */
+:root {
+  color-scheme: dark;
+  --bg: #0b1220;
+  --device: rgba(12, 14, 19, 0.74);
+  --screen: #05070b;
+  --ink: #e6e9ee;
+  --muted: #8a929c;
+  --line: rgba(255, 255, 255, 0.1);
+  --stop: #e2553f;
+  --led: #ffb070;          /* updated live from the scene's time of day */
+  --led-glow: rgba(255, 176, 112, 0.55);
+  --font-led: "Share Tech Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-ui: "IBM Plex Sans KR", system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+  min-height: 100vh;
+}
+#scene { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; display: block; }
+
+.device {
+  position: relative; z-index: 1; max-width: 500px; margin: 0 auto;
+  display: flex; flex-direction: column; gap: 18px;
+  background: var(--device); border: 1px solid var(--line); border-radius: 22px; padding: 16px;
+  -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+}
+
+/* ----- LED screen ----- */
+.screen {
+  position: relative; overflow: hidden;
+  background: var(--screen); border-radius: 14px; padding: 14px 16px 14px;
+  box-shadow: inset 0 2px 12px rgba(0,0,0,0.9), inset 0 0 0 1px rgba(255,255,255,0.05);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.screen::after { /* glass reflection + faint scanlines */
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(160deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 38%),
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 3px);
+}
+.seg { fill: var(--led); opacity: 0.07; transition: fill .6s linear; }
+.seg.on { opacity: 1; }
+svg.led { display: block; filter: drop-shadow(0 0 5px var(--led-glow)); overflow: visible; }
+
+.row { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.lbl { font-family: var(--font-led); font-size: 11px; letter-spacing: 0.14em; color: var(--led); opacity: 0.6; text-transform: uppercase; }
+.cell { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.cell.right { align-items: flex-end; }
+.clock { display: flex; align-items: flex-end; gap: 8px; }
+#sceneSeg { height: 26px; width: auto; }
+#lapNoSeg { height: 26px; width: auto; }
+.phase { font-size: 12px; color: var(--led); opacity: 0.85; padding-bottom: 2px; white-space: nowrap; }
+#mainSeg { width: 100%; height: auto; }
+#lapSeg { height: 20px; width: auto; }
+.status { font-family: var(--font-led); font-size: 13px; letter-spacing: 0.16em; color: var(--led); }
+.status.idle { opacity: 0.45; }
+.status.run { animation: blink 1s steps(2, start) infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+
+.daybar { display: flex; flex-direction: column; gap: 4px; }
+.strip { position: relative; height: 8px; border-radius: 4px; }
+.marker { position: absolute; top: -4px; width: 2px; height: 16px; background: var(--led); box-shadow: 0 0 6px var(--led-glow); transform: translateX(-1px); }
+.hours { display: flex; justify-content: space-between; font-family: var(--font-led); font-size: 10px; color: var(--muted); }
+
+/* ----- controls ----- */
+.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+button {
+  font: 600 16px var(--font-ui); padding: 14px 16px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--line); background: #1a1e25; color: var(--ink);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 0 rgba(0,0,0,0.5);
+  transition: transform .08s ease, background .3s ease;
+}
+button:active { transform: translateY(1px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.04); }
+button:focus-visible { outline: 2px solid var(--led); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: default; }
+button.primary { background: var(--led); border-color: transparent; color: #12100c; }
+button.primary.stop { background: var(--stop); color: #fff; }
+
+.settings { display: flex; flex-direction: column; gap: 10px; }
+.set { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.set .name { font-size: 12px; color: var(--muted); width: 5em; flex: none; white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 500 12px var(--font-ui); padding: 6px 11px; border-radius: 999px; box-shadow: none; background: transparent; color: var(--muted); }
+.chip[aria-pressed="true"] { background: var(--ink); color: #0b0d11; border-color: var(--ink); }
+.keys { text-align: center; font-size: 12px; color: var(--muted); }
+kbd { font-family: var(--font-led); font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; background: #1a1e25; color: var(--ink); }
+
+/* ----- lap log ----- */
+.laps { display: flex; flex-direction: column; font-family: var(--font-led); }
+.laps-head, .lap { display: grid; grid-template-columns: 3em 1fr 1fr 4.2em; gap: 8px; padding: 9px 4px; align-items: baseline; }
+.laps-head { font-size: 11px; letter-spacing: 0.1em; color: var(--muted); border-bottom: 1px solid var(--line); }
+.lap { font-size: 16px; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
+.lap > :nth-child(n+2), .laps-head > :nth-child(n+2) { text-align: right; }
+.lap .n, .lap .tod { color: var(--muted); }
+.lap .tod { font-size: 13px; }
+.lap.best .d { color: #5fd49a; }
+.lap.worst .d { color: #ff8a73; }
+.lap.current { color: var(--muted); }
+.tag { font-family: var(--font-ui); font-size: 10px; margin-left: 6px; }
+.empty { padding: 16px 4px; color: var(--muted); font-size: 13px; text-align: center; font-family: var(--font-ui); }
+
+@media (max-width: 420px) {
+  .laps-head, .lap { grid-template-columns: 2.4em 1fr 1fr 3.6em; font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { button, .seg { transition: none; } .status.run { animation: none; } }
+</style>
+</head><body style="margin:0">
+
+<canvas id="scene" aria-hidden="true"></canvas>
+
+<div class="device">
+  <div class="screen" role="group" aria-label="스탑워치 디스플레이">
+    <div class="row">
+      <div class="cell">
+        <span class="lbl" id="sceneLbl">Scene time</span>
+        <div class="clock"><svg class="led" id="sceneSeg"></svg><span class="phase" id="phase">일출</span></div>
+      </div>
+      <div class="cell right">
+        <span class="lbl">Lap</span>
+        <svg class="led" id="lapNoSeg"></svg>
+      </div>
+    </div>
+
+    <svg class="led" id="mainSeg" role="img" aria-label="경과 시간"></svg>
+
+    <div class="row">
+      <div class="cell">
+        <span class="lbl">Split</span>
+        <svg class="led" id="lapSeg"></svg>
+      </div>
+      <span class="status idle" id="status">READY</span>
+    </div>
+
+    <div class="daybar">
+      <div class="strip" id="strip"><div class="marker" id="marker"></div></div>
+      <div class="hours"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="secondary" type="button" disabled>랩</button>
+    <button id="primary" class="primary" type="button">시작</button>
+  </div>
+  <div class="keys"><kbd>Space</kbd> 시작/정지 · <kbd>L</kbd> 랩 · <kbd>R</kbd> 초기화</div>
+
+  <div class="settings">
+    <div class="set"><span class="name">풍경</span><div class="chips" id="sceneChips" role="group" aria-label="풍경"></div></div>
+    <div class="set"><span class="name">하루 길이</span><div class="chips" id="cycleChips" role="group" aria-label="하루 길이"></div></div>
+  </div>
+
+  <div class="laps">
+    <div class="laps-head"><span>LAP</span><span>SPLIT</span><span>TOTAL</span><span>풍경</span></div>
+    <div id="lapList"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  /* =========================================================
+     Shared helpers
+     ========================================================= */
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+  const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const toHex = a => "#" + a.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
+  const mix = (a, b, t) => { const A = hex(a), B = hex(b); return toHex(A.map((v, i) => v + (B[i] - v) * t)); };
+  const rgba = (h, a) => { const c = hex(h); return `rgba(${c[0]},${c[1]},${c[2]},${a})`; };
+  const p2 = n => String(n).padStart(2, "0");
+
+  // keyframes: [[hour, value], ...] covering 0..24; value = color, number, or array of colors
+  function interp(keys, h) {
+    let i = 0; while (i < keys.length - 2 && h >= keys[i + 1][0]) i++;
+    const [h0, v0] = keys[i], [h1, v1] = keys[i + 1];
+    const t = Math.max(0, Math.min(1, (h - h0) / (h1 - h0 || 1)));
+    const one = (a, b) => typeof a === "number" ? a + (b - a) * t : mix(a, b, t);
+    return Array.isArray(v0) ? v0.map((c, k) => one(c, v1[k])) : one(v0, v1);
+  }
+
+  /* =========================================================
+     Time-of-day model
+     ========================================================= */
+  const NIGHT_SKY = ["#03060f", "#0b1430", "#1a2546"];
+  const SKY = [
+    [0, NIGHT_SKY], [4.5, NIGHT_SKY],
+    [5.5, ["#0d1838", "#3a3f6b", "#8a5a6e"]],
+    [6.5, ["#4a6fa5", "#e8a07a", "#ffd29a"]],
+    [8, ["#5d9bd3", "#a7cde8", "#e6eff4"]],
+    [12, ["#3f86cf", "#8ec0e6", "#d7e9f3"]],
+    [16.5, ["#5a95cf", "#a9c9e2", "#efe0c4"]],
+    [18.5, ["#3b4d84", "#e07d5a", "#ffbe7a"]],
+    [19.5, ["#1b2350", "#5a3f6e", "#c06a6a"]],
+    [21, NIGHT_SKY], [24, NIGHT_SKY]
+  ];
+  const TINT = [
+    [0, "#0b1430"], [4.5, "#0b1430"], [5.5, "#2a2a55"], [6.5, "#ff8a4a"], [8, "#ffe6c8"],
+    [16.5, "#ffd9a0"], [18.5, "#ff7040"], [19.5, "#2b2550"], [21, "#0b1430"], [24, "#0b1430"]
+  ];
+  const TINT_A = [
+    [0, 0.7], [4.5, 0.7], [5.5, 0.55], [6.5, 0.24], [8, 0.0], [16.5, 0.08],
+    [18.5, 0.28], [19.5, 0.52], [21, 0.7], [24, 0.7]
+  ];
+  const STAR_A = [[0, 1], [4.5, 1], [6, 0], [19.5, 0], [21, 1], [24, 1]];
+  const LED = [
+    [0, "#8fdcff"], [4.5, "#8fdcff"], [6.5, "#ffb070"], [9, "#ffe7a3"], [17, "#ffe7a3"],
+    [18.7, "#ff9a6a"], [20.5, "#8fdcff"], [24, "#8fdcff"]
+  ];
+  function phaseName(h) {
+    if (h < 4.5) return "밤";
+    if (h < 6) return "새벽";
+    if (h < 7.5) return "일출";
+    if (h < 11) return "아침";
+    if (h < 15) return "한낮";
+    if (h < 18) return "오후";
+    if (h < 19.5) return "일몰";
+    if (h < 21) return "저녁";
+    return "밤";
+  }
+
+  /* =========================================================
+     Landscapes (terrain is pre-rendered in daylight colors,
+     then tinted per frame for the time of day)
+     ========================================================= */
+  const canvas = $("scene"), main = canvas.getContext("2d");
+  const terrainCv = document.createElement("canvas"), tcx = terrainCv.getContext("2d");
+  const tintCv = document.createElement("canvas"), tint = tintCv.getContext("2d");
+  let ctx = tcx;
+
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function wave(W, rnd, base, amp, oct) {
+    oct = oct || 4; const ph = [], fr = [];
+    for (let i = 0; i < oct; i++) { ph.push(rnd() * 6.283); fr.push(Math.pow(2, i) * (0.7 + rnd() * 0.8)); }
+    const pts = [];
+    for (let x = 0; x <= W + 4; x += 4) {
+      let y = 0, a = 1, s = 0;
+      for (let i = 0; i < oct; i++) { y += Math.sin(x / W * Math.PI * 2 * fr[i] + ph[i]) * a; s += a; a *= 0.5; }
+      pts.push([x, base - y / s * amp]);
+    }
+    return pts;
+  }
+  function mesa(W, rnd, base, amp) {
+    const pts = []; let x = -20, y = base - rnd() * amp; pts.push([x, y]);
+    while (x < W + 20) {
+      x += 40 + rnd() * 170; pts.push([x, y]);
+      const ny = base - rnd() * amp;
+      x += Math.abs(ny - y) * (0.3 + rnd() * 0.6) + 8; y = ny; pts.push([x, y]);
+    }
+    return pts;
+  }
+  function polyPath(pts, H) { ctx.beginPath(); ctx.moveTo(pts[0][0], H); pts.forEach(p => ctx.lineTo(p[0], p[1])); ctx.lineTo(pts[pts.length - 1][0], H); ctx.closePath(); }
+  function fillPts(pts, H, color) { polyPath(pts, H); ctx.fillStyle = color; ctx.fill(); }
+  function haze(W, y0, y1, color) {
+    const g = ctx.createLinearGradient(0, y0, 0, y1);
+    g.addColorStop(0, rgba(color, 0)); g.addColorStop(1, rgba(color, 0.4));
+    ctx.fillStyle = g; ctx.fillRect(0, y0, W, y1 - y0);
+  }
+  function pine(x, base, h, color) {
+    const w = h * 0.34; ctx.fillStyle = color; ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const top = base - h + i * h * 0.24, bot = base - h * 0.08 - (2 - i) * h * 0.18, ww = w * (0.55 + i * 0.25);
+      ctx.moveTo(x, top); ctx.lineTo(x + ww / 2, bot); ctx.lineTo(x - ww / 2, bot); ctx.closePath();
+    }
+    ctx.fill(); ctx.fillRect(x - h * 0.02, base - h * 0.1, h * 0.04, h * 0.1);
+  }
+
+  const SCENES = {
+    yosemite: {
+      label: "요세미티", place: "요세미티 · 캘리포니아", seed: 11, horizon: 0.6,
+      draw(W, H, rnd) {
+        const S = Math.max(W, H * 0.9);
+        fillPts(wave(W, rnd, H * 0.52, H * 0.05), H, "#a9b3bd");
+        ctx.beginPath(); ctx.moveTo(-10, H * 0.24); ctx.quadraticCurveTo(W * 0.1, H * 0.22, W * 0.14, H * 0.26);
+        ctx.lineTo(W * 0.24, H * 0.64); ctx.lineTo(-10, H * 0.64); ctx.closePath(); ctx.fillStyle = "#b9bec3"; ctx.fill();
+        ctx.beginPath(); ctx.moveTo(W * 0.14, H * 0.26); ctx.lineTo(W * 0.24, H * 0.64); ctx.lineTo(W * 0.17, H * 0.64); ctx.lineTo(W * 0.11, H * 0.27); ctx.closePath();
+        ctx.fillStyle = "#959ca3"; ctx.fill();
+        const cx = W * 0.7, by = H * 0.63, h = H * 0.36, r = S * 0.17;
+        ctx.beginPath(); ctx.moveTo(cx - r * 1.5, by);
+        ctx.bezierCurveTo(cx - r * 1.1, by - h * 0.7, cx - r * 0.6, by - h * 1.05, cx + r * 0.12, by - h);
+        ctx.lineTo(cx + r * 0.2, by - h * 0.96); ctx.lineTo(cx + r * 0.3, by); ctx.closePath();
+        ctx.fillStyle = "#c6cacd"; ctx.fill();
+        ctx.beginPath(); ctx.moveTo(cx - r * 0.02, by - h * 0.99); ctx.lineTo(cx + r * 0.2, by - h * 0.96);
+        ctx.lineTo(cx + r * 0.3, by); ctx.lineTo(cx - r * 0.05, by); ctx.closePath(); ctx.fillStyle = "#8b9298"; ctx.fill();
+        haze(W, H * 0.45, H * 0.66, "#dbeaf2");
+        fillPts(wave(W, rnd, H * 0.68, H * 0.03), H, "#5c7a52");
+        fillPts(wave(W, rnd, H * 0.8, H * 0.02), H, "#86a05c");
+        for (let x = -20; x < W + 20; x += 9 + rnd() * 14) pine(x, H * 0.72 + rnd() * H * 0.04, H * (0.06 + rnd() * 0.05), "#3a5a40");
+        for (let x = -20; x < W + 20; x += 18 + rnd() * 30) pine(x, H * (0.9 + rnd() * 0.1), H * (0.14 + rnd() * 0.12), "#1f3626");
+      }
+    },
+    canyon: {
+      label: "그랜드캐니언", place: "그랜드캐니언 · 애리조나", seed: 23, horizon: 0.46,
+      draw(W, H, rnd) {
+        const layers = [[0.44, 0.06, "#d8bba6"], [0.53, 0.09, "#d29a72"], [0.65, 0.12, "#bd6c44"], [0.82, 0.14, "#94442a"]];
+        layers.forEach(([b, a, c], li) => {
+          const pts = mesa(W, rnd, H * b, H * a);
+          ctx.save(); polyPath(pts, H); ctx.fillStyle = c; ctx.fill(); ctx.clip();
+          let y = H * (b - a) - 4;
+          while (y < H) {
+            const band = 4 + rnd() * (8 + li * 4);
+            ctx.fillStyle = mix(c, rnd() > 0.5 ? "#f5e3cf" : "#5a2412", 0.08 + rnd() * 0.14);
+            ctx.fillRect(0, y, W, band); y += band + 2 + rnd() * 10;
+          }
+          ctx.restore();
+          if (li < layers.length - 1) haze(W, H * (b - a), H * (b + 0.08), "#f2dcc2");
+        });
+        const g = ctx.createLinearGradient(0, H * 0.85, 0, H);
+        g.addColorStop(0, "rgba(40,15,8,0)"); g.addColorStop(1, "rgba(40,15,8,0.45)");
+        ctx.fillStyle = g; ctx.fillRect(0, H * 0.85, W, H * 0.15);
+      }
+    },
+    monument: {
+      label: "모뉴먼트 밸리", place: "모뉴먼트 밸리 · 유타", seed: 37, horizon: 0.73,
+      draw(W, H, rnd) {
+        fillPts(mesa(W, rnd, H * 0.73, H * 0.03), H, "#a7684f");
+        const gy = H * 0.75;
+        const g = ctx.createLinearGradient(0, gy, 0, H);
+        g.addColorStop(0, "#d0814c"); g.addColorStop(1, "#8a3d20");
+        ctx.fillStyle = g; ctx.fillRect(0, gy, W, H - gy);
+        const S = Math.max(W, H * 0.9);
+        [[0.2, 0.15, 0.27], [0.55, 0.06, 0.32], [0.62, 0.035, 0.22], [0.84, 0.19, 0.2]].forEach(([fx, fw, fh]) => {
+          const cx = W * fx, w = S * fw, h = H * fh, tw = w * 0.4, b = gy + 2;
+          ctx.beginPath();
+          ctx.moveTo(cx - w / 2 - tw, b); ctx.quadraticCurveTo(cx - w / 2 - tw * 0.2, b - h * 0.2, cx - w / 2, b - h * 0.36);
+          ctx.lineTo(cx - w / 2 + w * 0.05, b - h); ctx.lineTo(cx + w / 2 - w * 0.05, b - h);
+          ctx.lineTo(cx + w / 2, b - h * 0.36); ctx.quadraticCurveTo(cx + w / 2 + tw * 0.2, b - h * 0.2, cx + w / 2 + tw, b);
+          ctx.closePath(); ctx.fillStyle = "#a9472a"; ctx.fill();
+          ctx.beginPath(); ctx.moveTo(cx + w * 0.12, b - h); ctx.lineTo(cx + w / 2 - w * 0.05, b - h);
+          ctx.lineTo(cx + w / 2, b - h * 0.36); ctx.quadraticCurveTo(cx + w / 2 + tw * 0.2, b - h * 0.2, cx + w / 2 + tw, b);
+          ctx.lineTo(cx + w * 0.2, b); ctx.closePath(); ctx.fillStyle = "#77301c"; ctx.fill();
+        });
+        ctx.fillStyle = "#5d4a2a"; ctx.globalAlpha = 0.5;
+        for (let i = 0; i < 60; i++) {
+          const x = rnd() * W, y = gy + 20 + rnd() * (H - gy);
+          ctx.beginPath(); ctx.ellipse(x, y, 3 + rnd() * 6, 2 + rnd() * 2, 0, 0, 6.283); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+    },
+    smoky: {
+      label: "스모키산맥", place: "그레이트스모키산맥 · 테네시", seed: 51, horizon: 0.5,
+      draw(W, H, rnd) {
+        const far = "#c4d2df", near = "#23394b", n = 7;
+        for (let i = 0; i < n; i++) {
+          const t = i / (n - 1);
+          fillPts(wave(W, rnd, H * (0.4 + t * 0.48), H * (0.05 + t * 0.04)), H, mix(far, near, Math.pow(t, 0.9)));
+          if (i < n - 1) haze(W, H * (0.38 + t * 0.48), H * (0.46 + t * 0.48), "#e6edf3");
+        }
+        for (let x = -20; x < W + 20; x += 7 + rnd() * 10) pine(x, H * (0.97 + rnd() * 0.05), H * (0.05 + rnd() * 0.06), "#16283a");
+      }
+    }
+  };
+  const ORDER = ["yosemite", "canyon", "monument", "smoky"];
+  let sceneKey = store.get("sw-scene", "yosemite"); if (!SCENES[sceneKey]) sceneKey = "yosemite";
+
+  let W = 0, H = 0, dpr = 1, starList = [];
+  function buildTerrain() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    [canvas, terrainCv, tintCv].forEach(c => { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); });
+    ctx = tcx; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    const sc = SCENES[sceneKey];
+    sc.draw(W, H, rng(sc.seed));
+    const r = rng(99); starList = [];
+    for (let i = 0; i < 240; i++) starList.push([r() * W, r() * H * 0.62, r() * 1.2 + 0.3, 0.35 + r() * 0.6]);
+    lastH = -1;
+  }
+
+  function glowDisc(x, y, r, color, glowAlpha) {
+    const g = main.createRadialGradient(x, y, 0, x, y, r * 6);
+    g.addColorStop(0, rgba(color, glowAlpha)); g.addColorStop(1, rgba(color, 0));
+    main.fillStyle = g; main.fillRect(x - r * 6, y - r * 6, r * 12, r * 12);
+    main.fillStyle = color; main.beginPath(); main.arc(x, y, r, 0, 6.283); main.fill();
+  }
+
+  let lastH = -1;
+  function renderScene(h) {
+    if (Math.abs(h - lastH) < 0.004) return;
+    lastH = h;
+    const sc = SCENES[sceneKey], horizonY = H * sc.horizon;
+    main.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // sky
+    const sky = interp(SKY, h);
+    const g = main.createLinearGradient(0, 0, 0, horizonY);
+    g.addColorStop(0, sky[0]); g.addColorStop(0.6, sky[1]); g.addColorStop(1, sky[2]);
+    main.fillStyle = g; main.fillRect(0, 0, W, H);
+
+    // stars
+    const sa = interp(STAR_A, h);
+    if (sa > 0.01) {
+      main.fillStyle = "#ffffff";
+      starList.forEach(([x, y, r, a]) => { main.globalAlpha = a * sa; main.beginPath(); main.arc(x, y, r, 0, 6.283); main.fill(); });
+      main.globalAlpha = 1;
+    }
+
+    // sun (06→19) and moon (19→06) arc across the sky and sink behind the terrain
+    const arc = t => [W * (0.1 + 0.8 * t), horizonY + H * 0.05 - Math.sin(Math.PI * t) * horizonY * 0.85];
+    if (h >= 5.6 && h <= 19.4) {
+      const t = (h - 6) / 13, [x, y] = arc(t);
+      const high = Math.max(0, Math.min(1, Math.sin(Math.PI * Math.max(0, Math.min(1, t))) * 2.2));
+      glowDisc(x, y, 18, mix("#ff9a4a", "#fff6dc", high), 0.45);
+    }
+    if (h >= 18.6 || h <= 6.4) {
+      const t = (h >= 18.6 ? h - 19 : h + 5) / 11, [x, y] = arc(t);
+      glowDisc(x, y, 13, "#eef0f6", 0.16);
+    }
+
+    // terrain, tinted for the light
+    const ta = interp(TINT_A, h);
+    tint.setTransform(1, 0, 0, 1, 0, 0);
+    tint.globalCompositeOperation = "source-over";
+    tint.clearRect(0, 0, tintCv.width, tintCv.height);
+    tint.drawImage(terrainCv, 0, 0);
+    if (ta > 0.005) {
+      tint.globalCompositeOperation = "source-atop";
+      tint.fillStyle = rgba(interp(TINT, h), ta);
+      tint.fillRect(0, 0, tintCv.width, tintCv.height);
+    }
+    main.setTransform(1, 0, 0, 1, 0, 0);
+    main.drawImage(tintCv, 0, 0);
+  }
+
+  /* =========================================================
+     Seven-segment displays
+     ========================================================= */
+  const NS = "http://www.w3.org/2000/svg";
+  const DIG = { 0: "abcdef", 1: "bc", 2: "abged", 3: "abgcd", 4: "fgbc", 5: "afgcd", 6: "afgedc", 7: "abc", 8: "abcdefg", 9: "abcdfg", "-": "g" };
+  const T = 10, G = 3;
+  const hp = (x1, x2, y) => [[x1, y], [x1 + T / 2, y - T / 2], [x2 - T / 2, y - T / 2], [x2, y], [x2 - T / 2, y + T / 2], [x1 + T / 2, y + T / 2]];
+  const vp = (x, y1, y2) => [[x, y1], [x + T / 2, y1 + T / 2], [x + T / 2, y2 - T / 2], [x, y2], [x - T / 2, y2 - T / 2], [x - T / 2, y1 + T / 2]];
+  const GEO = { a: hp(5 + G, 51 - G, 5), g: hp(5 + G, 51 - G, 50), d: hp(5 + G, 51 - G, 95), f: vp(5, 5 + G, 50 - G), b: vp(51, 5 + G, 50 - G), e: vp(5, 50 + G, 95 - G), c: vp(51, 50 + G, 95 - G) };
+
+  // pattern: '8' digit, 's' small digit, ':' colon, ';' switchable colon, '.' point
+  function makeSeg(svg, pattern) {
+    const sk = document.createElementNS(NS, "g"); sk.setAttribute("transform", "skewX(-6)");
+    svg.appendChild(sk);
+    const slots = []; let x = 0;
+    const rect = (parent, rx, ry, s) => { const r = document.createElementNS(NS, "rect"); r.setAttribute("x", rx); r.setAttribute("y", ry); r.setAttribute("width", s); r.setAttribute("height", s); r.setAttribute("class", "seg on"); parent.appendChild(r); return r; };
+    for (const ch of pattern) {
+      if (ch === "8" || ch === "s") {
+        const sc = ch === "s" ? 0.6 : 1, grp = document.createElementNS(NS, "g");
+        grp.setAttribute("transform", `translate(${x} ${100 * (1 - sc)}) scale(${sc})`);
+        const segs = {};
+        for (const k in GEO) {
+          const p = document.createElementNS(NS, "polygon");
+          p.setAttribute("points", GEO[k].map(q => q.join(",")).join(" "));
+          p.setAttribute("class", "seg"); grp.appendChild(p); segs[k] = p;
+        }
+        sk.appendChild(grp); slots.push({ type: "d", segs }); x += 68 * sc;
+      } else if (ch === ":" || ch === ";") {
+        const a = rect(sk, x + 2, 26, 10), b = rect(sk, x + 2, 64, 10);
+        if (ch === ";") slots.push({ type: "c", els: [a, b] });
+        x += 22;
+      } else if (ch === ".") { rect(sk, x, 85, 10); x += 18; }
+    }
+    svg.setAttribute("viewBox", `-12 -4 ${x + 8} 108`);
+    svg.setAttribute("preserveAspectRatio", "xMinYMid meet");
+    let last = null;
+    return function (str) {
+      if (str === last) return; last = str;
+      slots.forEach((s, i) => {
+        const c = str[i] || " ";
+        if (s.type === "d") { const on = DIG[c] || ""; for (const k in s.segs) s.segs[k].classList.toggle("on", on.includes(k)); }
+        else s.els.forEach(e => e.classList.toggle("on", c !== " "));
+      });
+    };
+  }
+  const setMain = makeSeg($("mainSeg"), "8;88:88.ss");
+  const setScene = makeSeg($("sceneSeg"), "88:88");
+  const setLapNo = makeSeg($("lapNoSeg"), "88");
+  const setSplit = makeSeg($("lapSeg"), "88:88.88");
+
+  /* =========================================================
+     Stopwatch state
+     ========================================================= */
+  const CYCLES = [["1분", 60e3], ["10분", 600e3], ["1시간", 3600e3], ["24시간", 86400e3]];
+  let cycle = store.get("sw-cycle", 60e3); if (!CYCLES.some(c => c[1] === cycle)) cycle = 60e3;
+  const saved = store.get("stopwatch-state-v1", null) || {};
+  let acc = saved.acc || 0, startedAt = saved.startedAt || null, laps = saved.laps || [];
+  const save = () => store.set("stopwatch-state-v1", { acc, startedAt, laps });
+
+  const running = () => startedAt !== null;
+  const elapsed = () => acc + (running() ? Date.now() - startedAt : 0);
+  const sceneHour = ms => (6 + (ms / cycle) * 24) % 24;   // 0 on the stopwatch = 06:00 sunrise
+  const hm = h => { const m = Math.floor(h * 60) % 1440; return p2(Math.floor(m / 60)) + ":" + p2(m % 60); };
+  function fmt(ms) {
+    const cs = Math.floor(ms / 10) % 100, s = Math.floor(ms / 1000) % 60, m = Math.floor(ms / 60000) % 60, h = Math.floor(ms / 3600000);
+    return (h ? h + ":" + p2(m) : p2(m)) + ":" + p2(s) + "." + p2(cs);
+  }
+
+  const primary = $("primary"), secondary = $("secondary"), list = $("lapList"), statusEl = $("status");
+  const phaseEl = $("phase"), marker = $("marker"), rootStyle = document.documentElement.style;
+
+  // day strip painted from the sky model
+  (function () {
+    const stops = [];
+    for (let h = 0; h <= 24; h += 1) stops.push(`${interp(SKY, h)[1]} ${(h / 24 * 100).toFixed(2)}%`);
+    $("strip").style.background = `linear-gradient(90deg, ${stops.join(",")})`;
+  })();
+
+  function renderLaps() {
+    if (!laps.length) { list.innerHTML = '<div class="empty">랩을 기록하면 구간 시간과 그때의 풍경 시각이 쌓입니다.</div>'; return; }
+    const d = laps.map((t, i) => t - (i ? laps[i - 1] : 0));
+    let best = -1, worst = -1;
+    if (d.length >= 2) { best = d.indexOf(Math.min(...d)); worst = d.indexOf(Math.max(...d)); }
+    let html = "";
+    if (running() || elapsed() > (laps[laps.length - 1] || 0)) {
+      html += `<div class="lap current"><span class="n">${p2(laps.length + 1)}</span><span class="d" id="curLap"></span><span id="curTot"></span><span class="tod" id="curTod"></span></div>`;
+    }
+    for (let i = d.length - 1; i >= 0; i--) {
+      const cls = i === best ? " best" : i === worst ? " worst" : "";
+      const tag = i === best ? '<span class="tag">최고</span>' : i === worst ? '<span class="tag">최저</span>' : "";
+      html += `<div class="lap${cls}"><span class="n">${p2(i + 1)}</span><span class="d">${fmt(d[i])}${tag}</span><span>${fmt(laps[i])}</span><span class="tod">${hm(sceneHour(laps[i]))}</span></div>`;
+    }
+    list.innerHTML = html;
+  }
+
+  function renderControls() {
+    const r = running(), e = elapsed();
+    primary.textContent = r ? "정지" : (e > 0 ? "계속" : "시작");
+    primary.classList.toggle("stop", r);
+    secondary.textContent = r || e === 0 ? "랩" : "초기화";
+    secondary.disabled = !r && e === 0;
+    statusEl.textContent = r ? "RUN" : (e > 0 ? "PAUSE" : "READY");
+    statusEl.className = "status " + (r ? "run" : e > 0 ? "" : "idle");
+  }
+
+  let lastLed = "";
+  function frame() {
+    const e = elapsed(), h = sceneHour(e);
+    // main readout
+    const hr = Math.floor(e / 3600000), m = Math.floor(e / 60000) % 60, s = Math.floor(e / 1000) % 60, cs = Math.floor(e / 10) % 100;
+    setMain((hr ? String(hr % 10) : " ") + (hr ? ":" : " ") + p2(m) + p2(s) + p2(cs));
+    const last = laps[laps.length - 1] || 0, sp = e - last;
+    setSplit(laps.length ? p2(Math.floor(sp / 60000) % 100) + p2(Math.floor(sp / 1000) % 60) + p2(Math.floor(sp / 10) % 100) : "      ");
+    setLapNo(laps.length ? p2((laps.length + 1) % 100) : "  ");
+    $("lapSeg").style.opacity = laps.length ? 1 : 0.2;
+    const mm = Math.floor(h * 60) % 1440;
+    setScene(p2(Math.floor(mm / 60)) + p2(mm % 60));
+    phaseEl.textContent = phaseName(h);
+    marker.style.left = (h / 24 * 100) + "%";
+    // LED color follows the light outside
+    const led = interp(LED, h);
+    if (led !== lastLed) { lastLed = led; rootStyle.setProperty("--led", led); rootStyle.setProperty("--led-glow", rgba(led, 0.55)); }
+    const cl = $("curLap");
+    if (cl) { cl.textContent = fmt(sp); $("curTot").textContent = fmt(e); $("curTod").textContent = hm(h); }
+    renderScene(h);
+    if (running()) requestAnimationFrame(frame);
+  }
+
+  function toggle() {
+    if (running()) { acc = elapsed(); startedAt = null; } else { startedAt = Date.now(); }
+    save(); renderControls(); renderLaps(); frame();
+  }
+  function lap() { if (!running()) return; laps.push(elapsed()); save(); renderLaps(); }
+  function reset() { if (running()) return; acc = 0; laps = []; save(); renderControls(); renderLaps(); lastH = -1; frame(); }
+
+  primary.addEventListener("click", toggle);
+  secondary.addEventListener("click", () => running() ? lap() : reset());
+  document.addEventListener("keydown", ev => {
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (ev.code === "Space") { ev.preventDefault(); toggle(); }
+    else if (ev.key === "l" || ev.key === "L") lap();
+    else if (ev.key === "r" || ev.key === "R") reset();
+  });
+
+  /* ----- settings chips ----- */
+  function chipRow(el, items, isOn, onPick) {
+    el.innerHTML = "";
+    items.forEach(([label, val, id]) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "chip"; b.id = id; b.textContent = label;
+      b.setAttribute("aria-pressed", isOn(val) ? "true" : "false");
+      b.addEventListener("click", () => { onPick(val); b.blur(); });
+      el.appendChild(b);
+    });
+  }
+  function renderSettings() {
+    chipRow($("sceneChips"), ORDER.map(k => [SCENES[k].label, k, "scene-" + k]), v => v === sceneKey, v => {
+      sceneKey = v; store.set("sw-scene", v); buildTerrain(); renderSettings(); frame();
+    });
+    chipRow($("cycleChips"), CYCLES.map(([l, v]) => [l, v, "cycle-" + v]), v => v === cycle, v => {
+      cycle = v; store.set("sw-cycle", v); renderSettings(); renderLaps(); lastH = -1; frame();
+    });
+    $("sceneLbl").textContent = SCENES[sceneKey].place;
+  }
+  document.querySelectorAll("button").forEach(b => b.addEventListener("keydown", e => { if (e.code === "Space") e.preventDefault(); }));
+  $("sceneChips").addEventListener("keydown", e => { if (e.code === "Space") e.preventDefault(); });
+  $("cycleChips").addEventListener("keydown", e => { if (e.code === "Space") e.preventDefault(); });
+
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { buildTerrain(); frame(); }, 80); });
+
+  buildTerrain(); renderSettings(); renderControls(); renderLaps(); frame();
+  // test hook: preview any scene hour without running the clock
+  window.__previewHour = h => { lastH = -1; renderScene(h); };
+})();
+</script>
+</body></html>
